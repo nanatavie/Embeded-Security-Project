@@ -30,4 +30,6 @@ The reponse we get now is the following
 
 ![Real entrance](images/Capture%20d’écran%202026-10-07%20105448.png)
 
-## 4. 
+## 4. Attack process
+
+### 4.1 
