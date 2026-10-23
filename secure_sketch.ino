@@ -9,9 +9,14 @@ const char PASSWORD[] = "f7-@Jp0w";
 const char *secret = "Je suis une petite tortue";
 const int salt_size = 4;
 
-//const uint8_t SALT[] = { 0x41, 0x42, 0x43, 0x44 }; 
+//const uint8_t SALT[] = { 0x41, 0x42, 0x43, 0x44 };
 // Buffer for digest (32 bytes for SHA3-256)
 uint8_t digest[32];
+
+// --- Fix 2: fixed salt + precomputed digest used ONLY for authentication.
+// Kept separate from the salt/hash handed out in the protected section.
+const uint8_t AUTH_SALT[4] = { 0x11, 0x22, 0x33, 0x44 };
+uint8_t PASSWORD_DIGEST[32];   // = SHA3-256(AUTH_SALT || PASSWORD), computed in setup()
 
 // choose pins: RX is the pin Arduino listens on (connect TX of other device here)
 // TX is the pin Arduino transmits on (connect RX of other device here)
@@ -26,6 +31,10 @@ void setup() {
   Serial.println();
   Serial.println("Welcome to the vault. This is not the main entrance.");
   comms.begin(9600);          // software serial communications
+
+  // Fix 2: precompute the reference digest once, at boot.
+  hashPassword(PASSWORD, AUTH_SALT, sizeof(AUTH_SALT), PASSWORD_DIGEST);
+
   comms.println("Enter password:");
 
   pinMode(13, OUTPUT);
@@ -58,22 +67,21 @@ String readLine(Stream &s) {
   return str;
 }
 
-// Early-exit, character-by-character comparison
-bool early_exit_compare(const char *attempt) {
-  size_t pass_len = sizeof(PASSWORD) - 1; // exclude terminating NUL
-  for (size_t i = 0; i < pass_len; ++i) {
-    /*Serial.print("Character from password: '");
-    Serial.print(PASSWORD[i]);
-    Serial.print("', attempt: '");/home/dlh/ECAM/Cours/5MEO Embedded Security/Course/00/ES5T_00/resource/ES5_CM0_code_naif.ino
-    Serial.print(attempt[i]);
-    Serial.println("'");*/
-    // if attempt ended early or characters differ -> fail immediately
-    if (attempt[i] == '\0') return false;
-    if (attempt[i] != PASSWORD[i]) return false;
-    //delayMicroseconds(50);
+// Fix 2: hash the attempt (salted) and compare DIGESTS, using
+// Fix 1: a constant-time compare (no early exit).
+// The compare runs over hash bytes that are uncorrelated with the attempt
+// characters, so there is no per-character position left for SPA to exploit,
+// and the SHA3 work is the same for every attempt.
+bool check_password(const char *attempt) {
+  uint8_t d[32];
+  hashPassword(attempt, AUTH_SALT, sizeof(AUTH_SALT), d); // reuse the same routine
+
+  // Fix 1 (constant time): no early exit, fold all 32 byte differences into one value.
+  uint8_t diff = 0;
+  for (int i = 0; i < 32; ++i) {
+    diff |= (uint8_t)(d[i] ^ PASSWORD_DIGEST[i]);
   }
-  // ensure attempt has no extra characters
-  return true;
+  return diff == 0;
 }
 
 void protected_section(Stream &out) {
@@ -113,7 +121,7 @@ void loop() {
     attempt.toCharArray(attempt_c, sizeof(attempt_c));
 
     digitalWrite(13, HIGH);
-    if (early_exit_compare(attempt_c)) {
+    if (check_password(attempt_c)) {
       protected_section(comms);
     } else {
       comms.println(">> ACCESS DENIED");
